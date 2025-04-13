@@ -1,4 +1,4 @@
-module chatbox
+module github.com/henryhwang/chatbot
 
 go 1.23.0
 
