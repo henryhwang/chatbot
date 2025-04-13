@@ -25,6 +25,7 @@ type ModelProvider struct {
 type OpenAIRequest struct {
 	Model    string    `json:"model"`
 	Messages []Message `json:"messages"`
+	Stream   bool      `json:"stream,omitempty"`
 }
 
 type Message struct {
@@ -38,6 +39,20 @@ type OpenAIResponse struct {
 
 type Choice struct {
 	Message Message `json:"message"`
+}
+
+type OpenAIStreamResponse struct {
+	Choices []StreamChoice `json:"choices"`
+}
+
+type StreamChoice struct {
+	Delta        Delta   `json:"delta"`
+	FinishReason *string `json:"finish_reason,omitempty"`
+}
+
+type Delta struct {
+	Role    string `json:"role,omitempty"`
+	Content string `json:"content,omitempty"`
 }
 
 func main() {
@@ -70,11 +85,10 @@ func queryHandler(messages *[]Message, input string, provider ModelProvider) {
 	*messages = append(*messages, Message{Role: "user", Content: input})
 
 	requestBody, err := json.Marshal(OpenAIRequest{
-		Model: provider.Model,
-
+		Model:    provider.Model,
 		Messages: *messages,
+		Stream:   true,
 	})
-
 	if err != nil {
 		fmt.Printf("Bot: Error preparing request: %v\n", err)
 		return
@@ -88,6 +102,8 @@ func queryHandler(messages *[]Message, input string, provider ModelProvider) {
 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("Accept", "text/event-stream") // Ensure the response is streamed
+	req.Header.Set("Connection", "keep-alive")
 
 	client := &http.Client{}
 	resp, err := client.Do(req)
@@ -97,25 +113,96 @@ func queryHandler(messages *[]Message, input string, provider ModelProvider) {
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		fmt.Printf("Bot: Error reading response: %v\n", err)
+	if resp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		fmt.Printf("Bot: Error response from LLM (Status %d): %s\n", resp.StatusCode, string(bodyBytes))
+		return
+	}
+	fmt.Print("Bot: ")               // Print prefix once before streaming starts
+	var fullResponse strings.Builder // Accumulate the full response text
+	scanner := bufio.NewScanner(resp.Body)
+	assistantRole := "assistant" // Default role
+
+	for scanner.Scan() {
+		line := scanner.Text()
+
+		if strings.HasPrefix(line, "data: ") {
+			data := strings.TrimPrefix(line, "data: ")
+			if data == "[DONE]" {
+				break // Stream finished
+			}
+
+			var streamResp OpenAIStreamResponse
+			err = json.Unmarshal([]byte(data), &streamResp)
+			if err != nil {
+				// Log the problematic data and error
+				log.Printf("Error unmarshalling stream data: %v. Data: '%s'", err, data)
+				continue // Skip this chunk if parsing fails
+			}
+
+			if len(streamResp.Choices) > 0 {
+				// Capture role if present (usually in the first chunk)
+				if streamResp.Choices[0].Delta.Role != "" {
+					assistantRole = streamResp.Choices[0].Delta.Role
+				}
+				// Print the content chunk and add to the full response
+				contentChunk := streamResp.Choices[0].Delta.Content
+				fmt.Print(contentChunk) // Print immediately
+				fullResponse.WriteString(contentChunk)
+			}
+		}
+	} // End scanner loop
+
+	fmt.Println() // Add a newline after the streaming is complete
+
+	if err := scanner.Err(); err != nil {
+		fmt.Printf("\nBot: Error reading stream: %v\n", err)
+		// Don't add potentially incomplete response to history
 		return
 	}
 
-	var response OpenAIResponse
-	err = json.Unmarshal(body, &response)
-	if err != nil {
-		fmt.Printf("Bot: Error parsing response: %v\n", err)
-		return
-	}
-
-	if len(response.Choices) > 0 {
-		fmt.Println("Bot: ", response.Choices[0].Message.Content)
-		*messages = append(*messages, response.Choices[0].Message)
+	// Add the complete assistant message to the history *after* streaming is done
+	if fullResponse.Len() > 0 {
+		*messages = append(*messages, Message{Role: assistantRole, Content: fullResponse.String()})
 	} else {
-		fmt.Println("Bot: No response received, try again")
+		// Handle cases where the stream might have ended without content or with errors
+		fmt.Println("Bot: Received an empty or incomplete response.")
 	}
+	// reader := bufio.NewReader(resp.Body)
+	// for {
+	// 	line, err := reader.ReadString('\n')
+	// 	if err != nil && err != io.EOF {
+	// 		fmt.Printf("Bot: Error reading response: %v\n", err)
+	// 		return
+	// 	}
+	// 	if line == "" {
+	// 		break
+	// 	}
+	//
+	// 	var streamResponse map[string]interface{}
+	// 	err = json.Unmarshal([]byte(line), &streamResponse)
+	// 	if err != nil {
+	// 		fmt.Printf("Bot: Error parsing response: %v\n", err)
+	// 		return
+	// 	}
+	//
+	// 	choices, ok := streamResponse["choices"].([]interface{})
+	// 	if !ok || len(choices) == 0 {
+	// 		continue
+	// 	}
+	//
+	// 	choice := choices[0].(map[string]interface{})
+	// 	message, ok := choice["delta"].(map[string]interface{})
+	// 	if !ok {
+	// 		continue
+	// 	}
+	//
+	// 	content, ok := message["content"].(string)
+	// 	if ok && content != "" {
+	// 		fmt.Print(content)
+	// 		*messages = append(*messages, Message{Role: "assistant", Content: content})
+	// 	}
+	// }
 }
 
 func getProvider() ModelProvider {
