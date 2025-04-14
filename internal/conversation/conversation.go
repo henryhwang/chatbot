@@ -1,7 +1,6 @@
 package conversation
 
 import (
-	"log"
 	"time" // Import time package
 
 	"github.com/henryhwang/chatbot/internal/types"

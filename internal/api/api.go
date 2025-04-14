@@ -138,7 +138,7 @@ func handleStreamResponse(body io.Reader) (strings.Builder, string, bool, bool, 
 			}
 
 			var streamResp types.OpenAIStreamResponse
-			err = json.Unmarshal([]byte(data), &streamResp)
+			err := json.Unmarshal([]byte(data), &streamResp)
 			if err != nil {
 
 				log.Printf("Error unmarshalling stream data: %v. Data: '%s'", err, data)
