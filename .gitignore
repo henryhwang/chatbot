@@ -1,0 +1,57 @@
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+bin/
+dist/
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool
+*.out
+coverage/
+
+# Dependency directories (managed by Go modules)
+vendor/  # Optional, if using vendoring instead of Go modules
+
+# Go workspace file
+go.work
+
+# IDE and editor files
+.idea/           # IntelliJ IDEA
+.vscode/         # Visual Studio Code
+*.swp            # Vim swap files
+*.swo
+.DS_Store        # macOS Finder metadata
+
+# Logs and temporary files
+*.log
+tmp/
+temp/
+
+# Environment files (if you store sensitive info)
+.env
+*.env.local
+*.env.*.local
+
+# Build artifacts and caches
+*.o
+*.a
+*.6
+*.8
+_cache/
+
+# Profiling and debugging files
+profile.out
+pprof/
+
+# OS-specific ignores
+Thumbs.db  # Windows thumbnail cache
+desktop.ini
+
+# Optional: Ignore local test data or large datasets
+testdata/
+data/
