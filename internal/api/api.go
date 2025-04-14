@@ -19,61 +19,49 @@ const (
 	maxHistoryMessages = 20 // Keep the last 10 turns (user + assistant)
 )
 
+// manageHistory appends the user's input and truncates the history if it exceeds the limit.
+func manageHistory(messages *[]types.Message, input string) {
+	// Append the user's message
+	*messages = append(*messages, types.Message{Role: "user", Content: input})
+
+	// Truncate if history exceeds the maximum allowed size
+	if len(*messages) > maxHistoryMessages {
+		startIndex := len(*messages) - maxHistoryMessages
+		*messages = (*messages)[startIndex:]
+		log.Printf("History truncated to the last %d messages.", maxHistoryMessages) // Log truncation
+	}
+}
+
 // --- Core Query Handler (Handles Streaming) ---
 
-func QueryHandler(messages *[]types.Message, input string, provider types.ModelProvider) {
+// QueryHandler sends the user input and conversation history to the LLM API
+// and processes the streaming response. It updates the messages slice with the
+// assistant's final response.
+func QueryHandler(messages *[]types.Message, input string, provider types.ModelProvider) error {
 	apiURL := provider.UrlBase + provider.APIs["chat"] // Ensure "chat" key exists in APIS map
 	apiKey := provider.APIKey
 
-	// Append the user's message to the history for context
-	*messages = append(*messages, types.Message{Role: "user", Content: input})
-
-	// --- Limit History Size ---
-	// Ensure we don't send an excessively long history to the API
-	if len(*messages) > maxHistoryMessages {
-		// Keep only the last 'maxHistoryMessages' messages
-		startIndex := len(*messages) - maxHistoryMessages
-		*messages = (*messages)[startIndex:]
-		// Optional: Log that truncation happened
-		// log.Printf("History truncated to the last %d messages.", maxHistoryMessages)
-	}
+	// Append user message and manage history length
+	manageHistory(messages, input)
 
 	// --- Prepare the request payload ---
-	// Send the potentially truncated conversation history
+	// Send the current conversation history
 	// Enable streaming
-	requestBody, err := prepareRequestPayload(provider, messages) // Pass the potentially truncated messages
+	requestBody, err := prepareRequestPayload(provider, messages)
 	if err != nil {
-		fmt.Printf("\nBot: Error preparing request: %v\n", err)
-		// Optional: Remove the last user message if request prep fails
+		// If request prep fails, remove the user message we just added
 		*messages = (*messages)[:len(*messages)-1]
-		return
+		return fmt.Errorf("error preparing request payload: %w", err)
 	}
 
-	// Create the HTTP request
-	// Set necessary headers for OpenAI-compatible streaming APIs
-	// Crucial for SSE
-	req, shouldReturn := prepareRequest(apiURL, requestBody, apiKey)
-	if shouldReturn {
-		return
-	} // Good practice for streaming
-
-	// Execute the request
-	client := &http.Client{}
-	resp, err := client.Do(req)
+	// Execute the API request and get the response
+	resp, err := executeAPIRequest(apiURL, requestBody, apiKey)
 	if err != nil {
-		fmt.Printf("\nBot: Error contacting LLM: %v\n", err)
-		return
+		// If request execution fails, remove the user message we just added
+		*messages = (*messages)[:len(*messages)-1]
+		return fmt.Errorf("error executing API request: %w", err) // Propagate error
 	}
-	defer resp.Body.Close() // Ensure the response body is closed
-
-	// Check for non-200 status codes (errors)
-	if resp.StatusCode != http.StatusOK {
-		bodyBytes, _ := io.ReadAll(resp.Body) // Try reading error details
-		fmt.Printf("\nBot: Error response from LLM (Status %d): %s\n", resp.StatusCode, string(bodyBytes))
-		// Optional: Remove the last user message if the call failed
-		// *messages = (*messages)[:len(*messages)-1]
-		return
-	}
+	defer resp.Body.Close()
 
 	// --- Process the Streaming Response ---
 	// Accumulate final *content* for chat history
@@ -109,7 +97,7 @@ func QueryHandler(messages *[]types.Message, input string, provider types.ModelP
 	// Append *only content* to history buffer
 	// end if len(streamResp.Choices) > 0
 	// end if strings.HasPrefix(line, "data: ")
-	fullResponse, scanner, assistantRole, reasoningPrinted, botPrefixPrinted := handleStreamResponse(resp, err) // End scanner loop (for scanner.Scan())
+	fullResponse, assistantRole, reasoningPrinted, botPrefixPrinted, streamErr := handleStreamResponse(resp.Body) // Pass resp.Body
 
 	// --- Cleanup after streaming finishes ---
 
@@ -118,30 +106,40 @@ func QueryHandler(messages *[]types.Message, input string, provider types.ModelP
 		fmt.Println()
 	} else {
 		// Handle cases where stream ended early or with no valid data
-		fmt.Println("\nBot: Received no response content.")
+		// Only print this if the stream didn't encounter an error itself
+		if streamErr == nil {
+			fmt.Println("\nBot: Received no response content.")
+		}
 	}
 
-	// Check for errors during scanning (e.g., network issues)
-	if err := scanner.Err(); err != nil {
-		fmt.Printf("\nBot: Error reading stream: %v\n", err)
-		// Don't add potentially incomplete response to history
-		return
+	// Check for errors during stream processing
+	if streamErr != nil {
+		// Don't add potentially incomplete response to history if stream errored
+		return fmt.Errorf("error reading stream: %w", streamErr) // Propagate stream error
 	}
 
 	// Add the complete assistant message (content only) to the history
+	// Only add if there was actual content and no stream error
 	if fullResponse.Len() > 0 {
 		finalMessage := types.Message{Role: assistantRole, Content: fullResponse.String()}
 		*messages = append(*messages, finalMessage)
 	} else if !reasoningPrinted {
-		// Only show this message if NO reasoning AND NO content was generated
+		// Only show this message if NO reasoning AND NO content was generated, and no stream error
 		fmt.Println("Bot: Finished processing, but no text content was generated.")
 	}
+
+	return nil // Indicate success
 }
 
-func handleStreamResponse(resp *http.Response, err error) (strings.Builder, *bufio.Scanner, string, bool, bool) {
+// handleStreamResponse processes the SSE stream from the response body.
+// It prints reasoning and content chunks directly to stdout and accumulates
+// the final content response.
+// Returns the accumulated content, final assistant role, flags indicating if
+// reasoning/content was printed, and any error encountered during scanning.
+func handleStreamResponse(body io.Reader) (strings.Builder, string, bool, bool, error) {
 	var fullResponse strings.Builder
-	scanner := bufio.NewScanner(resp.Body)
-	assistantRole := "assistant"
+	scanner := bufio.NewScanner(body) // Use the passed reader
+	assistantRole := "assistant"      // Default role
 	reasoningPrefix := "🤔 Reasoning: "
 	botPrefix := "Bot: "
 	currentlyReasoning := false
@@ -163,11 +161,14 @@ func handleStreamResponse(resp *http.Response, err error) (strings.Builder, *buf
 			if err != nil {
 
 				log.Printf("Error unmarshalling stream data: %v. Data: '%s'", err, data)
+				// Log the error but attempt to continue processing the stream
+				log.Printf("Error unmarshalling stream data: %v. Data: '%s'", err, data)
 				continue
 			}
 
 			if len(streamResp.Choices) > 0 {
-				delta := streamResp.Choices[0].Delta
+				choice := streamResp.Choices[0]
+				delta := choice.Delta
 
 				if delta.Role != "" {
 					assistantRole = delta.Role
@@ -203,10 +204,54 @@ func handleStreamResponse(resp *http.Response, err error) (strings.Builder, *buf
 					fmt.Print(delta.Content)
 					fullResponse.WriteString(delta.Content)
 				}
+
+				// Check for finish reason if needed (optional)
+				// if choice.FinishReason != nil {
+				//     log.Printf("Stream finished with reason: %s", *choice.FinishReason)
+				// }
 			}
 		}
 	}
-	return fullResponse, scanner, assistantRole, reasoningPrinted, botPrefixPrinted
+
+	// Check for scanner errors after the loop finishes
+	if err := scanner.Err(); err != nil {
+		log.Printf("Error reading stream: %v", err)
+		return fullResponse, assistantRole, reasoningPrinted, botPrefixPrinted, err // Return scanner error
+	}
+
+	return fullResponse, assistantRole, reasoningPrinted, botPrefixPrinted, nil // No error
+}
+
+// executeAPIRequest sends the prepared request to the API endpoint and checks the response status.
+func executeAPIRequest(apiURL string, requestBody []byte, apiKey string) (*http.Response, error) {
+	req, err := prepareRequest(apiURL, requestBody, apiKey)
+	if err != nil {
+		// No need to print here, error is returned
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		// No need to print here, error is returned
+		return nil, fmt.Errorf("failed to contact LLM API: %w", err)
+	}
+
+	// Check for non-OK status codes *before* trying to process the body
+	if resp.StatusCode != http.StatusOK {
+		defer resp.Body.Close() // Ensure body is closed even on error
+		bodyBytes, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			// Log reading error, but return the original status error
+			log.Printf("Error reading error response body: %v", readErr)
+			return nil, fmt.Errorf("LLM API returned error status %d (failed to read body)", resp.StatusCode)
+		}
+		// Return an error with the status code and response body
+		return nil, fmt.Errorf("LLM API returned error status %d: %s", resp.StatusCode, string(bodyBytes))
+	}
+
+	// Return the successful response (caller is responsible for closing the body)
+	return resp, nil
 }
 
 func prepareRequestPayload(provider types.ModelProvider, messages *[]types.Message) ([]byte, error) {
@@ -220,16 +265,17 @@ func prepareRequestPayload(provider types.ModelProvider, messages *[]types.Messa
 	return requestBody, err
 }
 
-func prepareRequest(apiURL string, requestBody []byte, apiKey string) (*http.Request, bool) {
+// prepareRequest creates a new HTTP request object with necessary headers.
+func prepareRequest(apiURL string, requestBody []byte, apiKey string) (*http.Request, error) {
 	req, err := http.NewRequest("POST", apiURL, bytes.NewBuffer(requestBody))
 	if err != nil {
-		fmt.Printf("\nBot: Error creating request: %v\n", err)
-		return nil, true
+		// Return error instead of printing and returning bool
+		return nil, fmt.Errorf("error creating HTTP request: %w", err)
 	}
 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+apiKey)
-	req.Header.Set("Accept", "text/event-stream")
-	req.Header.Set("Connection", "keep-alive")
-	return req, false
+	req.Header.Set("Accept", "text/event-stream") // Necessary for SSE
+	req.Header.Set("Connection", "keep-alive")    // Good practice for streaming
+	return req, nil                               // Return request and nil error
 }

@@ -38,11 +38,19 @@ func main() {
 
 		if strings.HasPrefix(input, "/") {
 			// Pass provider info to command functions
+			// Pass provider info to command functions
+			// Commands handle their own output/errors internally for now
 			commands.RunCmd(strings.TrimPrefix(input, "/"), provider)
 		} else if input != "" {
-			// Handle regular chat query, modifying the message history
-			api.QueryHandler(&messages, input, provider)
+			// Handle regular chat query
+			err := api.QueryHandler(&messages, input, provider)
+			if err != nil {
+				// Print API errors directly to the user for now
+				// Log the detailed error as well
+				log.Printf("API Query Error: %v", err)
+				fmt.Printf("\nBot: Error communicating with API: %s\n", err) // Show simpler error to user
+			}
 		}
-		// No message for empty input to avoid clutter
+		// No action for empty input to avoid clutter
 	}
 }
