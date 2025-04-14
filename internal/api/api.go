@@ -41,7 +41,7 @@ func QueryHandler(messages *[]types.Message, input string, provider types.ModelP
 	// --- Prepare the request payload ---
 	// Send the potentially truncated conversation history
 	// Enable streaming
-	requestBody, err := prepareRequestPayload(provider, messages)
+	requestBody, err := prepareRequestPayload(provider, messages) // Pass the potentially truncated messages
 	if err != nil {
 		fmt.Printf("\nBot: Error preparing request: %v\n", err)
 		// Optional: Remove the last user message if request prep fails
