@@ -13,6 +13,12 @@ import (
 	"github.com/henryhwang/chatbot/internal/types"
 )
 
+const (
+	// maxHistoryMessages defines the maximum number of messages (user + assistant)
+	// to keep in the conversation history sent to the API.
+	maxHistoryMessages = 20 // Keep the last 10 turns (user + assistant)
+)
+
 // --- Core Query Handler (Handles Streaming) ---
 
 func QueryHandler(messages *[]types.Message, input string, provider types.ModelProvider) {
@@ -22,8 +28,18 @@ func QueryHandler(messages *[]types.Message, input string, provider types.ModelP
 	// Append the user's message to the history for context
 	*messages = append(*messages, types.Message{Role: "user", Content: input})
 
-	// Prepare the request payload
-	// Send the whole conversation history
+	// --- Limit History Size ---
+	// Ensure we don't send an excessively long history to the API
+	if len(*messages) > maxHistoryMessages {
+		// Keep only the last 'maxHistoryMessages' messages
+		startIndex := len(*messages) - maxHistoryMessages
+		*messages = (*messages)[startIndex:]
+		// Optional: Log that truncation happened
+		// log.Printf("History truncated to the last %d messages.", maxHistoryMessages)
+	}
+
+	// --- Prepare the request payload ---
+	// Send the potentially truncated conversation history
 	// Enable streaming
 	requestBody, err := prepareRequestPayload(provider, messages)
 	if err != nil {
