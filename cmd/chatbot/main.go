@@ -10,7 +10,9 @@ import (
 	"github.com/henryhwang/chatbot/internal/api"
 	"github.com/henryhwang/chatbot/internal/commands"
 	"github.com/henryhwang/chatbot/internal/config"
-	"github.com/henryhwang/chatbot/internal/types"
+	"github.com/henryhwang/chatbot/internal/conversation" // Import conversation package
+	// types package might still be needed if commands use it, keep for now
+	// "github.com/henryhwang/chatbot/internal/types"
 )
 
 // --- Main Application Logic ---
@@ -26,10 +28,11 @@ func main() {
 	fmt.Println("--------------------------------------------")
 
 	reader := bufio.NewReader(os.Stdin)
-	// Initialize conversation history (can add a system message if desired)
-	messages := []types.Message{
-		// {Role: "system", Content: "You are a helpful assistant."},
-	}
+	// Initialize conversation manager
+	// Can pass initial system messages here if desired
+	conv := conversation.NewConversation(
+	// types.Message{Role: "system", Content: "You are a helpful assistant."},
+	)
 
 	for {
 		fmt.Print("You: ")
@@ -40,10 +43,11 @@ func main() {
 			// Pass provider info to command functions
 			// Pass provider info to command functions
 			// Commands handle their own output/errors internally for now
+			// Commands handle their own output/errors internally for now
 			commands.RunCmd(strings.TrimPrefix(input, "/"), provider)
 		} else if input != "" {
-			// Handle regular chat query
-			err := api.QueryHandler(&messages, input, provider)
+			// Handle regular chat query using the conversation object
+			err := api.QueryHandler(conv, input, provider) // Pass the conversation object
 			if err != nil {
 				// Print API errors directly to the user for now
 				// Log the detailed error as well

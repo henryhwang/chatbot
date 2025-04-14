@@ -10,55 +10,36 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/henryhwang/chatbot/internal/conversation" // Import the new package
 	"github.com/henryhwang/chatbot/internal/types"
 )
-
-const (
-	// maxHistoryMessages defines the maximum number of messages (user + assistant)
-	// to keep in the conversation history sent to the API.
-	maxHistoryMessages = 20 // Keep the last 10 turns (user + assistant)
-)
-
-// manageHistory appends the user's input and truncates the history if it exceeds the limit.
-func manageHistory(messages *[]types.Message, input string) {
-	// Append the user's message
-	*messages = append(*messages, types.Message{Role: "user", Content: input})
-
-	// Truncate if history exceeds the maximum allowed size
-	if len(*messages) > maxHistoryMessages {
-		startIndex := len(*messages) - maxHistoryMessages
-		*messages = (*messages)[startIndex:]
-		log.Printf("History truncated to the last %d messages.", maxHistoryMessages) // Log truncation
-	}
-}
 
 // --- Core Query Handler (Handles Streaming) ---
 
 // QueryHandler sends the user input and conversation history to the LLM API
-// and processes the streaming response. It updates the messages slice with the
-// assistant's final response.
-func QueryHandler(messages *[]types.Message, input string, provider types.ModelProvider) error {
+// and processes the streaming response. It updates the conversation object
+// with the assistant's final response.
+func QueryHandler(conv *conversation.Conversation, input string, provider types.ModelProvider) error {
 	apiURL := provider.UrlBase + provider.APIs["chat"] // Ensure "chat" key exists in APIS map
 	apiKey := provider.APIKey
 
-	// Append user message and manage history length
-	manageHistory(messages, input)
+	// Add user message to conversation history (handles truncation internally)
+	conv.AddMessage("user", input)
 
 	// --- Prepare the request payload ---
-	// Send the current conversation history
-	// Enable streaming
-	requestBody, err := prepareRequestPayload(provider, messages)
+	// Get the current messages from the conversation object
+	currentMessages := conv.GetMessages()
+	requestBody, err := prepareRequestPayload(provider, currentMessages) // Pass the slice
 	if err != nil {
-		// If request prep fails, remove the user message we just added
-		*messages = (*messages)[:len(*messages)-1]
+		// No need to manually remove the user message here,
+		// as it's already correctly added to the conversation history.
 		return fmt.Errorf("error preparing request payload: %w", err)
 	}
 
 	// Execute the API request and get the response
 	resp, err := executeAPIRequest(apiURL, requestBody, apiKey)
 	if err != nil {
-		// If request execution fails, remove the user message we just added
-		*messages = (*messages)[:len(*messages)-1]
+		// No need to manually remove the user message here.
 		return fmt.Errorf("error executing API request: %w", err) // Propagate error
 	}
 	defer resp.Body.Close()
@@ -118,11 +99,11 @@ func QueryHandler(messages *[]types.Message, input string, provider types.ModelP
 		return fmt.Errorf("error reading stream: %w", streamErr) // Propagate stream error
 	}
 
-	// Add the complete assistant message (content only) to the history
+	// Add the complete assistant message (content only) to the conversation history
 	// Only add if there was actual content and no stream error
 	if fullResponse.Len() > 0 {
-		finalMessage := types.Message{Role: assistantRole, Content: fullResponse.String()}
-		*messages = append(*messages, finalMessage)
+		// Use the conversation's method to add the message (handles truncation)
+		conv.AddMessage(assistantRole, fullResponse.String())
 	} else if !reasoningPrinted {
 		// Only show this message if NO reasoning AND NO content was generated, and no stream error
 		fmt.Println("Bot: Finished processing, but no text content was generated.")
@@ -254,10 +235,12 @@ func executeAPIRequest(apiURL string, requestBody []byte, apiKey string) (*http.
 	return resp, nil
 }
 
-func prepareRequestPayload(provider types.ModelProvider, messages *[]types.Message) ([]byte, error) {
+// prepareRequestPayload creates the JSON body for the API request.
+// It now accepts a slice of messages directly, not a pointer to a slice.
+func prepareRequestPayload(provider types.ModelProvider, messages []types.Message) ([]byte, error) {
 	requestPayload := types.OpenAIRequest{
 		Model:    provider.Model,
-		Messages: *messages,
+		Messages: messages, // Use the passed slice directly
 		Stream:   true,
 	}
 
