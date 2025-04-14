@@ -1,5 +1,7 @@
 package types
 
+import "time"
+
 // --- Configuration and Provider ---
 
 type ModelProvider struct {
@@ -19,10 +21,11 @@ type OpenAIRequest struct {
 	Stream   bool      `json:"stream,omitempty"` // Set to true for streaming
 }
 
-// Standard message structure
+// Standard message structure, now including a timestamp
 type Message struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role      string    `json:"role"`
+	Content   string    `json:"content"`
+	Timestamp time.Time `json:"-"` // Exclude from API JSON, internal use only
 }
 
 // --- Structs specifically for STREAMING response handling ---

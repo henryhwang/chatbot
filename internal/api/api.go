@@ -27,9 +27,9 @@ func QueryHandler(conv *conversation.Conversation, input string, provider types.
 	conv.AddMessage("user", input)
 
 	// --- Prepare the request payload ---
-	// Get the current messages from the conversation object
-	currentMessages := conv.GetMessages()
-	requestBody, err := prepareRequestPayload(provider, currentMessages) // Pass the slice
+	// Get the messages to send to the API (respecting the API context limit)
+	messagesForAPI := conv.GetMessagesForAPI()
+	requestBody, err := prepareRequestPayload(provider, messagesForAPI) // Pass the potentially limited slice
 	if err != nil {
 		// No need to manually remove the user message here,
 		// as it's already correctly added to the conversation history.
