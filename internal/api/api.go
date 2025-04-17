@@ -28,8 +28,9 @@ func QueryHandler(conv *conversation.Conversation, input string, provider types.
 
 	// --- Prepare the request payload ---
 	// Get the messages to send to the API (respecting the API context limit)
-	messagesForAPI := conv.GetMessagesForAPI()
-	requestBody, err := prepareRequestPayload(provider, messagesForAPI) // Pass the potentially limited slice
+	contextForLLM := conv.GetContext()
+
+	requestBody, err := prepareRequestPayload(provider, contextForLLM) // Pass the potentially limited slice
 	if err != nil {
 		// No need to manually remove the user message here,
 		// as it's already correctly added to the conversation history.
@@ -45,39 +46,6 @@ func QueryHandler(conv *conversation.Conversation, input string, provider types.
 	defer resp.Body.Close()
 
 	// --- Process the Streaming Response ---
-	// Accumulate final *content* for chat history
-	// Default role for the assistant's message
-	// Prefix for reasoning output
-	// Prefix for the final answer output
-	// State: Are we currently printing reasoning chunks?
-	// State: Has any reasoning been printed at all this turn?
-	// State: Has "Bot: " prefix been printed for the final answer?
-	// Process Server-Sent Event (SSE) lines
-	// Check for the stream termination signal
-	// Exit the loop, stream is finished
-	// Unmarshal the JSON data payload of the SSE line
-	// Log errors during parsing but try to continue
-	// Process the first choice in the response (common case)
-	// Get the delta (changes)
-	// Capture the assistant's role (usually in the first delta chunk)
-	// --- Process Reasoning Field ---
-	// Print reasoning prefix only when reasoning starts
-	// If content was just being printed, add a newline for separation
-	// Now in reasoning mode
-	// Mark that some reasoning was output
-	// Reset bot prefix flag as we switched mode
-	// Stream the reasoning chunk
-	// Reasoning is NOT added to fullResponse for history
-	// --- Process Content Field ---
-	// If switching from reasoning to content, print a newline
-	// Newline after reasoning block ends
-	// Exited reasoning mode
-	// Print the "Bot: " prefix only once before the first content chunk
-	// Mark prefix as printed
-	// Stream the content chunk
-	// Append *only content* to history buffer
-	// end if len(streamResp.Choices) > 0
-	// end if strings.HasPrefix(line, "data: ")
 	fullResponse, assistantRole, reasoningPrinted, botPrefixPrinted, streamErr := handleStreamResponse(resp.Body) // Pass resp.Body
 
 	// --- Cleanup after streaming finishes ---
@@ -140,8 +108,6 @@ func handleStreamResponse(body io.Reader) (strings.Builder, string, bool, bool, 
 			var streamResp types.OpenAIStreamResponse
 			err := json.Unmarshal([]byte(data), &streamResp)
 			if err != nil {
-
-				log.Printf("Error unmarshalling stream data: %v. Data: '%s'", err, data)
 				// Log the error but attempt to continue processing the stream
 				log.Printf("Error unmarshalling stream data: %v. Data: '%s'", err, data)
 				continue

@@ -30,9 +30,9 @@ func main() {
 	reader := bufio.NewReader(os.Stdin)
 	// Initialize conversation manager
 	// Can pass initial system messages here if desired
-	conv := conversation.NewConversation(
-	// types.Message{Role: "system", Content: "You are a helpful assistant."},
-	)
+	truncationStrategy := &conversation.SimpleTruncationStrategy{}
+	maxTokens := 32000
+	conv := conversation.NewConversation("you are great as golang developer", truncationStrategy, maxTokens)
 
 	for {
 		fmt.Print("You: ")
@@ -41,8 +41,6 @@ func main() {
 
 		if strings.HasPrefix(input, "/") {
 			// Pass provider info to command functions
-			// Pass provider info to command functions
-			// Commands handle their own output/errors internally for now
 			// Commands handle their own output/errors internally for now
 			commands.RunCmd(strings.TrimPrefix(input, "/"), provider)
 		} else if input != "" {
